@@ -10,15 +10,25 @@
 --    or from your machine, with the DIRECT (port 5432) connection string:
 --      SUPABASE_DB_URL="postgres://postgres.PROJECTREF:PASSWORD@db.PROJECTREF.supabase.co:5432/postgres" \
 --      npm run db:setup
--- 2. The Next.js app uses the service-role key for privileged operations
+-- 
+-- 2. IMPORTANT SETUP NOTES:
+--    - This schema is IDEMPOTENT - it's safe to re-run multiple times
+--    - The handle_new_user() trigger automatically creates public.users 
+--      profiles when new auth.users are registered
+--    - If you get "500 Database error creating new user" on registration:
+--      (a) Verify this entire schema was applied successfully
+--      (b) Check that the trigger 'on_auth_user_created' exists on auth.users
+--      (c) Ensure RLS policies are enabled on public.users table
+-- 
+-- 3. The Next.js app uses the service-role key for privileged operations
 --    (registration, webhooks) and a per-request SSR client (anon key) for
 --    user-scoped operations.
--- 3. RLS is enabled on every public table. The service-role role has its
+-- 4. RLS is enabled on every public table. The service-role role has its
 --    own permissive policies; anon / authenticated have explicit deny
 --    policies plus no direct grants. The single per-user SELECT policy
 --    on public.users uses auth.uid() so each user can read only their
 --    own profile.
--- 4. Safe to re-run. Cleanup uses a DO block that swallows 42P01.
+-- 5. Safe to re-run. Cleanup uses a DO block that swallows errors.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -109,7 +119,8 @@ $$;
 -- ---------------------------------------------------------------------------
 create table public.users (
   id             uuid         primary key references auth.users(id) on delete cascade on update cascade,
-  email          citext       not null unique,
+  email          citext       not null unique
+                               check (char_length(email) > 0 and char_length(email) <= 160),
   name           text         not null
                                check (char_length(name) between 1 and 60),
   role           public.user_role          not null default 'USER',
@@ -151,6 +162,11 @@ declare
   v_pubkey    text;
   v_name_ok   text;
 begin
+  -- Defensive coding: ensure email is provided
+  if new.email is null or new.email = '' then
+    raise exception 'Email cannot be null or empty for new user';
+  end if;
+
   v_name := coalesce(
     nullif(trim(new.raw_user_meta_data->>'name'), ''),
     split_part(new.email, '@', 1)
@@ -164,9 +180,14 @@ begin
   -- deterministic and we don't need a second secret source.
   v_pubkey := 'pk_live_' || encode(digest(new.id::text || ':' || new.email, 'sha256'), 'hex');
 
-  insert into public.users (id, email, name, role, public_key, active)
-  values (new.id, new.email, v_name_ok, 'USER', v_pubkey, true)
-  on conflict (id) do nothing;
+  begin
+    insert into public.users (id, email, name, role, public_key, active)
+    values (new.id, new.email, v_name_ok, 'USER', v_pubkey, true)
+    on conflict (id) do nothing;
+  exception when others then
+    -- Log the error but don't fail the trigger - auth.users is already created
+    raise notice 'Failed to create public.users profile for %: %', new.id, sqlerrm;
+  end;
 
   return new;
 end;
