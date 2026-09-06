@@ -30,7 +30,7 @@ export function ApiKeyCard({ hasKey, prefix, publicKey }: { hasKey: boolean; pre
       <div className="grid md:grid-cols-2 gap-4 mt-3">
         <div>
           <div className="text-white/40 text-xs mb-1">ID-USERS (your account id)</div>
-          <div className="mono text-sm break-all">— revealed in docs after sign in</div>
+          <div className="mono text-sm break-all">{publicKey || "—"}</div>
         </div>
         <div>
           <div className="text-white/40 text-xs mb-1">APIKEY (server-side, never expose to browser)</div>
