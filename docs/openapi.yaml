@@ -1,0 +1,156 @@
+openapi: 3.0.3
+info:
+  title: QRIS Engine API
+  version: 1.0.0
+  description: |
+    Per-account QRIS payment gateway. Every request must carry an API key
+    and the owning user id. The public key is a separate browser-safe
+    token used to read a single transaction or render its QR.
+servers:
+  - url: http://localhost:3000
+    description: Local
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+    publicKey:
+      type: apiKey
+      in: header
+      name: X-Public-Key
+  schemas:
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            fields: { type: object, additionalProperties: { type: string } }
+    Transaction:
+      type: object
+      properties:
+        transaction_id: { type: string }
+        reference_id: { type: string }
+        provider: { type: string }
+        provider_transaction_id: { type: string, nullable: true }
+        amount: { type: integer }
+        currency: { type: string, example: IDR }
+        status: { type: string, enum: [pending, paid, expired, failed] }
+        customer_name: { type: string, nullable: true }
+        customer_email: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        qr_image_url: { type: string, nullable: true }
+        payment_url: { type: string, nullable: true }
+        qr_endpoint: { type: string }
+        expires_at: { type: string, format: date-time, nullable: true }
+        paid_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+paths:
+  /api/v1/health:
+    get:
+      summary: Health
+      security: []
+      responses: { '200': { description: OK } }
+  /api/v1/payments:
+    post:
+      summary: Create a payment
+      parameters:
+        - in: header
+          name: X-User-Id
+          required: true
+          schema: { type: string }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, reference_id]
+              properties:
+                amount: { type: integer, minimum: 1 }
+                reference_id: { type: string }
+                customer_name: { type: string }
+                customer_email: { type: string, format: email }
+                description: { type: string }
+      responses:
+        '200': { description: Created }
+        '400': { description: Validation error }
+        '401': { description: Unauthorized }
+        '502': { description: Provider error }
+  /api/v1/payments/{transactionId}:
+    get:
+      summary: Get status
+      parameters:
+        - in: path
+          name: transactionId
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-User-Id
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK }, '404': { description: Not found } }
+  /api/v1/payments/{transactionId}/qr:
+    get:
+      summary: QR image
+      security:
+        - publicKey: []
+      parameters:
+        - in: path
+          name: transactionId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: PNG
+          content: { image/png: {} }
+  /api/v1/payments/reference/{referenceId}:
+    get:
+      summary: Lookup by reference
+      parameters:
+        - in: path
+          name: referenceId
+          required: true
+          schema: { type: string }
+        - in: header
+          name: X-User-Id
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /api/v1/public/payments/{transactionId}:
+    get:
+      summary: Public read of one transaction
+      security:
+        - publicKey: []
+      parameters:
+        - in: path
+          name: transactionId
+          required: true
+          schema: { type: string }
+      responses: { '200': { description: OK } }
+  /api/v1/webhooks/saweria:
+    post:
+      summary: Saweria webhook
+      security: []
+      responses: { '200': { description: OK } }
+  /api/v1/me:
+    get: { summary: Current user, responses: { '200': { description: OK } } }
+  /api/v1/me/api-key:
+    post: { summary: Mint/rotate API key, responses: { '200': { description: OK } } }
+    delete: { summary: Revoke API key, responses: { '200': { description: OK } } }
+  /api/v1/admin/users:
+    get: { summary: List users (admin), responses: { '200': { description: OK } } }
+  /api/v1/admin/transactions:
+    get: { summary: List all transactions (admin), responses: { '200': { description: OK } } }
+  /api/v1/admin/transactions/{id}:
+    get: { summary: Get any transaction (admin), responses: { '200': { description: OK } } }
+  /api/v1/admin/webhooks:
+    get: { summary: List webhook events (admin), responses: { '200': { description: OK } } }
