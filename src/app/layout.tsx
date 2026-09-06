@@ -8,6 +8,7 @@ import { ensureInitialAdmin } from "@/lib/auth";
 export const metadata: Metadata = {
   title: "QRIS Engine — Payment Gateway API",
   description: "Production payment gateway. QRIS as a service. One simple REST API.",
+  icons: { icon: "/favicon.svg" },
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {

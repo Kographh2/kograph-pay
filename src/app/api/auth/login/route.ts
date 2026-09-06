@@ -10,6 +10,10 @@ const schema = z.object({
 
 export const dynamic = "force-dynamic";
 
+export async function GET() {
+  return fail("METHOD_NOT_ALLOWED", "Use POST to login.", undefined, 405);
+}
+
 // POST /api/auth/login
 //
 // Authenticates against Supabase Auth (auth.users) and establishes a

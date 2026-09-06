@@ -11,6 +11,10 @@ const schema = z.object({
 
 export const dynamic = "force-dynamic";
 
+export async function GET() {
+  return fail("METHOD_NOT_ALLOWED", "Use POST to register.", undefined, 405);
+}
+
 // POST /api/auth/register
 //
 // Flow:
@@ -68,8 +72,8 @@ export async function POST(req: NextRequest) {
       console.error("[register] Supabase auth backend error:", status, error.message);
       return fail(
         "AUTH_BACKEND_ERROR",
-        `Supabase auth backend error (${status}). The service may be temporarily unavailable or the database trigger is failing.`,
-        { hint: "Check Supabase Dashboard -> Logs -> Auth for details. Ensure the schema from supabase/schema.sql is applied.", error_id: (error as { error_id?: string }).error_id ?? "" },
+        "Supabase returned a server error while creating the user. Most likely the database schema is missing or the public.users table / handle_new_user trigger is not set up.",
+        { hint: "Apply supabase/schema.sql in the Supabase SQL Editor, or run: SUPABASE_DB_URL=postgres://... npm run db:setup", error_id: (error as { error_id?: string }).error_id ?? "" },
         503,
       );
     }
