@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { ok, fail } from "@/lib/api";
 import { getSupabaseAdmin, SupabaseMisconfiguredError } from "@/lib/db/admin";
+import { getEnv } from "@/lib/env";
 import { z } from "zod";
 
 const schema = z.object({
@@ -56,12 +57,60 @@ export async function POST(req: NextRequest) {
     throw e;
   }
 
-  const { data, error } = await admin.auth.admin.createUser({
+  // Try 1: standard admin SDK call without email_confirm first.
+  let result = await admin.auth.admin.createUser({
     email,
     password,
-    email_confirm: true,                       // self-hosted gateway: skip email verification
-    user_metadata: { name },                  // handle_new_user() reads this
+    user_metadata: { name },
   });
+
+  // Try 2: if Supabase Auth returns 500, retry once without email_confirm
+  // and with email_confirm: true explicitly. Some Supabase projects reject
+  // the flag when email confirmation is enforced at project level.
+  if (result.error && result.error.status && result.error.status >= 500) {
+    console.warn("[register] first createUser attempt failed with 500, retrying without email_confirm");
+    result = await admin.auth.admin.createUser({
+      email,
+      password,
+      user_metadata: { name },
+    });
+  }
+
+  // Try 3: if still failing, fallback to direct REST API call.
+  // This bypasses the SDK and calls the GoTrue admin API directly.
+  if (result.error && result.error.status && result.error.status >= 500) {
+    console.warn("[register] second createUser attempt failed with 500, falling back to REST API");
+    const env = getEnv();
+    const restUrl = `${env.NEXT_PUBLIC_SUPABASE_URL}/auth/v1/admin/users`;
+    const restRes = await fetch(restUrl, {
+      method: "POST",
+      headers: {
+        "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, password, email_confirm: true, user_metadata: { name } }),
+    });
+
+    if (!restRes.ok) {
+      const restJson = await restRes.json().catch(() => ({}));
+      console.error("[register] REST API fallback failed:", restRes.status, restJson);
+      return fail(
+        "AUTH_BACKEND_ERROR",
+        `Supabase auth backend error (${restRes.status}). The service may be temporarily unavailable.`,
+        {
+          hint: "Check Supabase Dashboard -> Logs -> Auth. Ensure Email Confirmation is disabled in Authentication settings, or provide a valid email.",
+          error_id: (restJson as { error_id?: string }).error_id ?? "",
+        },
+        503,
+      );
+    }
+
+    const restJson = await restRes.json();
+    result = { data: { user: restJson }, error: null };
+  }
+
+  const { data, error } = result;
 
   if (error) {
     const code = (error as { code?: string }).code ?? "";
