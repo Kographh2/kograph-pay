@@ -39,8 +39,13 @@ export async function POST(req: NextRequest) {
   });
 
   if (error || !data.user) {
-    // Map common Auth errors. Don't leak which one (user vs password) to
-    // the client — always return the same generic message.
+    console.error("[login] signInWithPassword failed:", JSON.stringify({
+      email: parsed.data.email,
+      error_name: (error as { name?: string } | null)?.name,
+      error_message: error?.message,
+      error_status: (error as { status?: number } | null)?.status,
+      error_code: (error as { code?: string } | null)?.code,
+    }));
     const status = (error as { status?: number } | null)?.status;
     if (status === 429) {
       return fail("RATE_LIMITED", "Too many login attempts. Try again later.", undefined, 429);
