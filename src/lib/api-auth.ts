@@ -44,11 +44,13 @@ export async function authenticateApiRequest(req: NextRequest): Promise<
   const header = req.headers.get("authorization") ?? "";
   const m = header.match(/^Bearer\s+(.+)$/i);
   if (!m) {
+    console.error("[auth] missing authorization header");
     return { ok: false, response: fail("UNAUTHORIZED", "Missing Authorization: Bearer header.", undefined, 401) };
   }
   const token = m[1].trim();
   const userId = req.headers.get("x-user-id");
   if (!userId) {
+    console.error("[auth] missing x-user-id header");
     return { ok: false, response: fail("UNAUTHORIZED", "Missing X-User-Id header.", undefined, 401) };
   }
   const hash = hashApiKey(token);
@@ -62,9 +64,11 @@ export async function authenticateApiRequest(req: NextRequest): Promise<
       active: boolean; api_key_hash: string | null; api_key_prefix: string | null;
     }>();
   if (!user || !user.active) {
+    console.error("[auth] unknown or disabled user:", { userId, found: !!user, active: user?.active });
     return { ok: false, response: fail("UNAUTHORIZED", "Unknown or disabled user.", undefined, 401) };
   }
   if (!user.api_key_hash || user.api_key_hash !== hash) {
+    console.error("[auth] invalid api key:", { userId, hasHash: !!user.api_key_hash, prefix: user.api_key_prefix });
     return { ok: false, response: fail("UNAUTHORIZED", "Invalid API key for this user.", undefined, 401) };
   }
   return {
