@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    serverComponentsExternalPackages: ["saweria-createqr", "@prisma/client"],
+    serverComponentsExternalPackages: ["@prisma/client"],
   },
   async headers() {
     return [

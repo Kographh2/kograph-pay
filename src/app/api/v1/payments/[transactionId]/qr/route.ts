@@ -40,6 +40,16 @@ export async function GET(
       .maybeSingle<PaymentTransaction>()).data;
 
   if (!record) return new Response("Transaction not found", { status: 404 });
+  if (record.qr_image_url?.startsWith("data:image/")) {
+    const base64 = record.qr_image_url.split(",")[1] ?? "";
+    const png = Buffer.from(base64, "base64");
+    return new Response(new Uint8Array(png), {
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=3600, immutable",
+      },
+    });
+  }
   if (record.qr_image_url) return Response.redirect(record.qr_image_url, 302);
   if (record.qr_data) {
     const png = await QRCode.toBuffer(record.qr_data, {
