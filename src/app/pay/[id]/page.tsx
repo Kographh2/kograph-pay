@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 
 type Tx = {
@@ -13,7 +13,7 @@ type Tx = {
   payment_url?: string;
 };
 
-export default function PayPage() {
+function PayContent() {
   const params = useParams<{ id: string }>();
   const sp = useSearchParams();
   const id = params.id;
@@ -84,5 +84,16 @@ export default function PayPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function PayPage() {
+  const params = useParams<{ id: string }>();
+  const id = params.id;
+
+  return (
+    <Suspense fallback={<div className="max-w-md mx-auto px-6 py-20 text-center text-sm text-white/50">Loading payment...</div>}>
+      <PayContent />
+    </Suspense>
   );
 }
