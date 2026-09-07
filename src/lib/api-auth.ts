@@ -48,23 +48,28 @@ export async function authenticateApiRequest(req: NextRequest): Promise<
     return { ok: false, response: fail("UNAUTHORIZED", "Missing Authorization: Bearer header.", undefined, 401) };
   }
   const token = m[1].trim();
+  const hash = hashApiKey(token);
   const userId = req.headers.get("x-user-id");
   if (!userId) {
     console.error("[auth] missing x-user-id header");
     return { ok: false, response: fail("UNAUTHORIZED", "Missing X-User-Id header.", undefined, 401) };
   }
-  const hash = hashApiKey(token);
   const admin = getSupabaseAdmin();
-  const { data: user } = await admin
+  
+  // Support both user ID and public key in X-User-Id for convenience.
+  const isPublicKey = userId.startsWith("pk_live_") || userId.startsWith("pk_test_");
+  const baseQuery = admin
     .from("users")
     .select("id, email, name, role, active, api_key_hash, api_key_prefix")
-    .eq("id", userId)
-    .maybeSingle<{
-      id: string; email: string; name: string; role: "USER" | "ADMIN";
-      active: boolean; api_key_hash: string | null; api_key_prefix: string | null;
-    }>();
+    .eq(isPublicKey ? "public_key" : "id", userId);
+
+  const { data: user } = await baseQuery.maybeSingle<{
+    id: string; email: string; name: string; role: "USER" | "ADMIN";
+    active: boolean; api_key_hash: string | null; api_key_prefix: string | null;
+  }>();
+
   if (!user || !user.active) {
-    console.error("[auth] unknown or disabled user:", { userId, found: !!user, active: user?.active });
+    console.error("[auth] unknown or disabled user:", { userId, found: !!user, active: user?.active, usedPublicKey: isPublicKey });
     return { ok: false, response: fail("UNAUTHORIZED", "Unknown or disabled user.", undefined, 401) };
   }
   if (!user.api_key_hash || user.api_key_hash !== hash) {
