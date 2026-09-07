@@ -28,6 +28,7 @@ const envSchema = z.object({
   SAWERIA_USERNAME: z.string().optional(),
   SAWERIA_EMAIL: z.string().optional(),
   SAWERIA_PASSWORD: z.string().optional(),
+  SAWERIA_USER_ID: z.string().uuid().optional(),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_ADMIN_CHAT_ID: z.string().optional(),
   PAYMENT_EXPIRATION_MINUTES: z.coerce.number().int().positive().default(15),

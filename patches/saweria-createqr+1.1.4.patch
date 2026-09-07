@@ -1,0 +1,51 @@
+diff --git a/node_modules/saweria-createqr/index.js b/node_modules/saweria-createqr/index.js
+index 1234567..abcdefg 100644
+--- a/node_modules/saweria-createqr/index.js
++++ b/node_modules/saweria-createqr/index.js
+@@ -2,7 +2,6 @@
+ const axios = require('axios');
+ const cheerio = require('cheerio');
+ const chalk = require('chalk');
+-const NodeCron = require('node-cron');
+ const randomUser = require('random-user');
+ const { createQr } = require('./lib/createQr.js');
+ const fs = require('fs');
+@@ -111,10 +110,7 @@ const SumshiiyAi = async (prompt) => {
+     }
+ }
+ 
+-setInterval(async() => {
+-    await pang();
+-}, 20000);
+-
+ const saveInvoice = (trx_id, username, amount, invoice_url, total_dibayar, created_at, expired_in) => {
+     let db = [];
+     const file = 'invoice.json';
+@@ -447,18 +443,10 @@ async setFee(action) {
+     }
+ }
+ 
+ 
+-}
+-
+-NodeCron.schedule('*/5 * * * *', async () => {
+-    const file = 'invoice.json';
+-    if (!fs.existsSync(file)) {
+-        return;
+-    }
+-    const db = JSON.parse(fs.readFileSync(file, 'utf8'));
+-    const now = new Date();
+-    const expired = db.filter((x) => new Date(x.expired_in) < now);
+-    if (expired.length < 1) {
+-        return;
+-    }
+-    expired.forEach((x) => {
+-        if (x.status !== 'Expired') {
+-            ubahStatus(x.trx_id, 'Expired', x.username);
+-        }
+-    });
+-
+-});
++}
+ 
+ exports.SumshiiySawer = SumshiiySawer;
