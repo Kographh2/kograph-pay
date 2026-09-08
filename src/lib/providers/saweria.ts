@@ -23,12 +23,41 @@ type SaweriaCreateResponse = {
 };
 
 type SaweriaStatusResponse = {
+  id?: string;
   code?: number;
   trx_id: string;
   status: string;
   amount?: number;
   invoice_url?: string;
 };
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function saweriaFetch(
+  input: RequestInfo,
+  init: RequestInit = {},
+  retries = 3,
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const res = await fetch(input, init);
+      if (!res.ok && res.status >= 500 && attempt < retries - 1) {
+        await delay(500 * (attempt + 1));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < retries - 1) {
+        await delay(500 * (attempt + 1));
+      }
+    }
+  }
+  throw lastError ?? new Error("Saweria request failed");
+}
 
 export class SaweriaProvider implements IPaymentProvider {
   readonly name = "saweria";
@@ -50,15 +79,97 @@ export class SaweriaProvider implements IPaymentProvider {
       password: env.SAWERIA_PASSWORD,
     });
     const loginResult = await sawer.login();
-    if ((loginResult as { status?: boolean } | null)?.status === false) {
-      const reason = (loginResult as { error?: string } | null)?.error ?? "Unknown login failure";
-      throw new Error(`Saweria login failed: ${reason}`);
+    const loginResultAny = loginResult as { status?: boolean; error?: string } | null;
+    if (loginResultAny?.status === false) {
+      const reason = loginResultAny.error ?? "Unknown login failure";
+      const msg = String(reason);
+      if (msg.includes("403") || msg.includes("Attention Required") || msg.includes("blocked")) {
+        throw new Error(
+          `Saweria access blocked from Vercel IP. This is a Cloudflare block. ` +
+          `Use SAWERIA_USER_ID env var and set PAYMENT_PROVIDER=mock, or deploy through a proxy/VPS. ` +
+          `Original: ${msg}`,
+        );
+      }
+      throw new Error(`Saweria login failed: ${msg}`);
     }
-    this.client = sawer as { login: () => Promise<unknown>; createPaymentQr: (amount: number, duration: number) => Promise<SaweriaCreateResponse>; cekPaymentV2: (trxId: string) => Promise<SaweriaStatusResponse>; setWebhook: () => Promise<unknown> };
+    this.client = sawer as {
+      login: () => Promise<unknown>;
+      createPaymentQr: (amount: number, duration: number) => Promise<SaweriaCreateResponse>;
+      cekPaymentV2: (trxId: string) => Promise<SaweriaStatusResponse>;
+      setWebhook: () => Promise<unknown>;
+    };
     return this.client;
   }
 
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
+    const env = getEnv();
+    const proxyBase = env.SAWERIA_PROXY_URL?.replace(/\/$/, "");
+
+    if (proxyBase && env.SAWERIA_USER_ID) {
+      const loginRes = await saweriaFetch(`${proxyBase}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: env.SAWERIA_EMAIL,
+          password: env.SAWERIA_PASSWORD,
+        }),
+      });
+
+      if (!loginRes.ok) {
+        const text = await loginRes.text().catch(() => "login failed");
+        throw new Error(`Saweria login failed (${loginRes.status}): ${text}`);
+      }
+
+      const loginJson = (await loginRes.json()) as { data: { jwt: string } };
+      const jwt = loginJson.data.jwt;
+
+      const createRes = await saweriaFetch(
+        `${proxyBase}/donations/${encodeURIComponent(env.SAWERIA_USER_ID)}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: jwt,
+          },
+          body: JSON.stringify({
+            agree: true,
+            notUnderage: true,
+            message: "Pembayaran QRIS",
+            amount: Math.round(input.amount),
+            payment_type: "qris",
+            vote: "",
+            currency: "IDR",
+            customer_info: {
+              first_name: input.customerName ?? "",
+              email: input.customerEmail ?? env.SAWERIA_EMAIL ?? "",
+              phone: "",
+            },
+          }),
+        },
+      );
+
+      if (!createRes.ok) {
+        const text = await createRes.text().catch(() => "create payment failed");
+        throw new Error(`Saweria create payment failed (${createRes.status}): ${text}`);
+      }
+
+      const created = (await createRes.json()) as { data: { id: string; qr_string: string; amount_raw: number; created_at: string } };
+      const qrString = created.data.qr_string ?? null;
+      const qrImageUrl = qrString
+        ? `data:image/png;base64,${await generateQrDataUrl(qrString)}`
+        : null;
+
+      return {
+        providerTransactionId: created.data.id,
+        amount: input.amount,
+        qrString,
+        qrImageUrl,
+        paymentUrl: `https://saweria.co/qris/${created.data.id}`,
+        expiresAt: new Date(Date.now() + input.expirationMinutes * 60_1000),
+        raw: created,
+      };
+    }
+
     const sawer = await this.getClient();
     const res = await sawer.createPaymentQr(input.amount, input.expirationMinutes);
     const qrImageUrl = res.qr_image ?? null;
@@ -74,6 +185,67 @@ export class SaweriaProvider implements IPaymentProvider {
   }
 
   async checkPaymentStatus(transactionId: string): Promise<NormalizedWebhook> {
+    const env = getEnv();
+    const proxyBase = env.SAWERIA_PROXY_URL?.replace(/\/$/, "");
+    if (proxyBase) {
+      const loginRes = await saweriaFetch(`${proxyBase}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: env.SAWERIA_EMAIL,
+          password: env.SAWERIA_PASSWORD,
+        }),
+      });
+
+      if (!loginRes.ok) {
+        const text = await loginRes.text().catch(() => "login failed");
+        throw new Error(`Saweria login failed (${loginRes.status}): ${text}`);
+      }
+
+      const loginJson = (await loginRes.json()) as { data: { jwt: string } };
+      const jwt = loginJson.data.jwt;
+
+      const res = await saweriaFetch(
+        `${proxyBase}/transactions?page=1&page_size=15&q=${encodeURIComponent(transactionId)}`,
+        {
+          headers: { Authorization: jwt },
+        },
+      );
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "status check failed");
+        throw new Error(`Saweria status check failed (${res.status}): ${text}`);
+      }
+
+      const json = (await res.json()) as { data: { transactions: SaweriaStatusResponse[] } };
+      const tx = json.data.transactions.find((t) => t.id === transactionId);
+
+      if (!tx) {
+        return {
+          provider: this.name,
+          eventId: transactionId,
+          eventType: "unknown",
+          providerTransactionId: transactionId,
+          referenceId: transactionId,
+          payload: { not_found: true },
+        };
+      }
+
+      const isPaid = tx.status === "Paid";
+      const isExpired = tx.status === "Expired";
+
+      return {
+        provider: this.name,
+        eventId: transactionId,
+        eventType: isPaid ? "donation" : isExpired ? "expired" : "pending",
+        providerTransactionId: tx.id,
+        referenceId: tx.id,
+        amount: tx.amount,
+        rawAmount: tx.amount,
+        payload: tx,
+      };
+    }
+
     const sawer = await this.getClient();
     const res = await sawer.cekPaymentV2(transactionId);
     return {
@@ -89,6 +261,43 @@ export class SaweriaProvider implements IPaymentProvider {
   }
 
   async setWebhook(url: string): Promise<unknown> {
+    const env = getEnv();
+    const proxyBase = env.SAWERIA_PROXY_URL?.replace(/\/$/, "");
+    if (proxyBase) {
+      const loginRes = await saweriaFetch(`${proxyBase}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: env.SAWERIA_EMAIL,
+          password: env.SAWERIA_PASSWORD,
+        }),
+      });
+
+      if (!loginRes.ok) {
+        const text = await loginRes.text().catch(() => "login failed");
+        throw new Error(`Saweria login failed (${loginRes.status}): ${text}`);
+      }
+
+      const loginJson = (await loginRes.json()) as { data: { jwt: string } };
+      const jwt = loginJson.data.jwt;
+
+      const res = await saweriaFetch(`${proxyBase}/callbacks/webhook`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: jwt,
+        },
+        body: JSON.stringify({ active: true, endpoint: url }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "set webhook failed");
+        throw new Error(`Saweria set webhook failed (${res.status}): ${text}`);
+      }
+
+      return res.json().catch(() => ({ status: true }));
+    }
+
     const sawer = await this.getClient();
     return sawer.setWebhook();
   }
@@ -117,4 +326,10 @@ export class SaweriaProvider implements IPaymentProvider {
       payload,
     };
   }
+}
+
+async function generateQrDataUrl(text: string): Promise<string> {
+  const QRCode = await import("qrcode");
+  const buffer = await QRCode.toBuffer(text, { width: 1024, margin: 2, errorCorrectionLevel: "M" });
+  return buffer.toString("base64");
 }
